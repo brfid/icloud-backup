@@ -1,58 +1,111 @@
 # icloud_backup
 
-Datetime-stamped, compressed, self-contained backups into a local iCloud Drive folder — no cloud API, token, or credential to maintain. You configure a list of folders; once a day a launchd agent writes one `.tar.gz` per folder into your iCloud `backups` directory, and Apple's own sync carries them off-machine. Old archives are pruned on a grandfather-father-son schedule, and a watchdog shouts if backups ever silently stop.
+icloud_backup writes compressed, timestamped snapshots of folders you choose into a folder inside iCloud Drive. iCloud syncs those snapshots to Apple's servers and your other devices, so backups leave your Mac with no cloud API, access token, or password to maintain.
 
-It is deliberately boring: every archive is a full, independent snapshot, so restoring is a single `tar` extract and pruning is a plain file delete. There are no delta chains to corrupt and no repository format to understand.
-
-## Why
-
-Most "back up to the cloud" setups lean on a provider API (Google Drive, S3, Dropbox) that needs OAuth tokens or keys kept alive. This one leans on a folder. If you already pay for iCloud storage, your Mac already syncs a local directory to it — so a backup is just *a compressed file that lands in that directory*. Nothing to authorize, nothing to renew.
-
-## How it works
-
-- **Full snapshots.** Each run writes `dest_root/<name>/<UTC-stamp>.tar.gz` for every configured source.
-- **Skip-if-unchanged.** Before archiving, the source is fingerprinted (relative path + size + mtime of every non-excluded file). If it matches the last snapshot, nothing is written — only a heartbeat is updated. Storage and upload churn then track real changes, not the clock.
-- **GFS retention.** Keep the newest snapshot per day for `daily` days, per week for `weekly` weeks, and per month for `monthly` months. The most recent snapshot is always kept.
-- **Fail loudly.** If any source fails, you get a macOS notification and a `⚠️ BACKUP FAILING.txt` on your Desktop; a clean run clears it. Because a job cannot report its own *absence*, a separate `watch.py` runs at login and periodically, and alarms if any source has no successful backup within `stale_hours`.
+Each run creates one `.tar.gz` per source folder. The tool removes older snapshots on a daily, weekly, and monthly schedule, and reports when a backup fails or stops running.
 
 ## Requirements
 
-Python 3.11+ (3.11 for the standard-library `tomllib`); Python 3.14+ only if you choose `compression = "zst"`. macOS, for the launchd agents and notifications. No third-party packages.
+- macOS, for the launchd agents and notifications.
+- Python 3.11 or later. Python 3.14 or later is required only for `compression = "zst"`.
+- No third-party packages.
+
+## Install
+
+1. Clone this repository, for example to `~/src/icloud-backup`.
+2. Copy `example.config.toml` to `~/.config/icloud_backup/config.toml` and edit it. See [Configure](#configure).
+3. Run one backup to confirm it works:
+
+   ```
+   python3 icloud_backup.py run
+   ```
+
+To run backups automatically, see [Schedule backups](#schedule-backups).
 
 ## Configure
 
-Copy `example.config.toml` to `~/.config/icloud_backup/config.toml` and edit it. Each `[[source]]` has a `name`, a `path`, and optional `excludes` (component-name globs like `node_modules`, `*.pyc`, `.venv`; matching directories are pruned from the walk). See the example for a per-source retention override.
+The config file sets a destination, a compression format, a retention policy, and one or more sources.
+
+```toml
+dest_root = "~/Library/Mobile Documents/com~apple~CloudDocs/backups"
+compression = "gz"   # "gz" (Python 3.11+) or "zst" (Python 3.14+)
+stale_hours = 36     # the watchdog alarms if a source has no backup within this window
+
+[retention]
+daily = 7
+weekly = 4
+monthly = 12
+
+[[source]]
+name = "documents"
+path = "~/Documents"
+excludes = [".DS_Store", "node_modules", "*.pyc"]
+```
+
+Each `[[source]]` accepts these keys:
+
+- `name`: the subfolder under `dest_root` that holds this source's snapshots.
+- `path`: the folder to back up.
+- `excludes` (optional): component-name globs. The tool skips any file or directory whose name matches, and does not descend into a matching directory.
+- `retention` (optional): a per-source override of the global `[retention]` table.
 
 ## Use
 
-```
-icloud_backup.py run              # snapshot every source (this is what launchd runs)
-icloud_backup.py list             # show archives per source, and which would be pruned
-icloud_backup.py verify           # reopen every archive and confirm it is readable
-icloud_backup.py restore NAME     # extract the newest snapshot of NAME to ~/Desktop
-icloud_backup.py restore NAME --at 20260813 --target /tmp/out
-```
+Invoke each command as `python3 icloud_backup.py <command>`. Pass `--config PATH`, or set `ICLOUD_BACKUP_CONFIG`, to use a config other than `~/.config/icloud_backup/config.toml`.
 
-Point at a non-default config with `--config PATH` or `$ICLOUD_BACKUP_CONFIG`.
+| Command | Description |
+| --- | --- |
+| `run` | Back up every source. Add `--only NAME` to back up one source. |
+| `list` | Show each source's snapshots, their sizes, and which ones the next prune keeps. |
+| `verify` | Reopen every snapshot and report whether it is readable. |
+| `restore NAME` | Extract a snapshot. Defaults to the newest; use `--at STAMP` to pick one and `--target DIR` to set the output location. |
 
-## Schedule
-
-Copy the templates in `launchd/` to `~/Library/LaunchAgents/`, edit the `Label`, interpreter path, and script paths, then load them:
+For example, to restore a specific snapshot to a scratch directory:
 
 ```
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<your-label>.plist
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<your-label>-watch.plist
+python3 icloud_backup.py restore documents --at 20260813 --target /tmp/restore
 ```
 
-The backup runs daily at 03:00 (a missed run fires on next wake); the watchdog runs at login and every six hours.
+## Schedule backups
+
+The `launchd/` directory holds two agent templates:
+
+- `com.example.icloud-backup.plist` runs a backup daily at 03:00.
+- `com.example.icloud-backup-watch.plist` runs the watchdog at login and every six hours.
+
+Copy each template to `~/Library/LaunchAgents/`, set the `Label`, the Python interpreter path, and the script path, then load it:
+
+```
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<label>.plist
+```
+
+## How it works
+
+### Snapshots
+
+Each snapshot is a complete `.tar.gz` of the source. Snapshots are independent, so a restore is a single extract and a prune is a file deletion. The archive's top-level directory is the source folder's own name.
+
+### Skip-if-unchanged
+
+Before archiving, the tool fingerprints the source from the relative path, size, and modification time of every non-excluded file. When the fingerprint matches the previous snapshot, the tool writes no new archive and records a heartbeat instead. Storage and upload activity then track how often the source changes rather than how often the tool runs.
+
+### Retention
+
+A prune keeps the newest snapshot in each of the most recent `daily` days, `weekly` weeks, and `monthly` months, and always keeps the most recent snapshot.
+
+### Failure reporting
+
+When a source fails, `run` posts a macOS notification, writes a file named `⚠️ BACKUP FAILING.txt` to the Desktop, and exits with a non-zero status. A later successful run removes the file.
+
+A scheduled job cannot report that it never started. The watchdog, `watch.py`, handles that case: it runs on its own agent and reports any source whose last successful backup is older than `stale_hours`. The tool records per-source state in `~/.local/state/icloud_backup/`.
 
 ## Limitations
 
-- The fingerprint uses size + mtime, like `rsync`'s default — a change that preserves both (rare) is not detected. Delete the source's state file in `~/.local/state/icloud_backup/` to force a fresh snapshot.
-- Off-machine safety depends on iCloud actually syncing. The tool writes locally and cannot confirm the bytes left your Mac; keep an eye on iCloud's status.
-- Archives are not encrypted. If the data is sensitive, enable Apple's Advanced Data Protection (end-to-end iCloud encryption) or encrypt the archives yourself.
-- Excludes are component-name globs, not full gitignore path patterns.
+- The fingerprint compares size and modification time, like rsync's default. It does not detect a change that preserves both. To force a fresh snapshot, delete the source's state file in `~/.local/state/icloud_backup/`.
+- The tool writes to a local folder and cannot confirm that iCloud uploaded it. Off-site durability depends on iCloud syncing.
+- Snapshots are not encrypted. For encryption at rest, turn on Advanced Data Protection or encrypt the archives yourself.
+- Excludes match single path components, not full path patterns.
 
 ## License
 
-MIT — see `LICENSE` (set your name in it before publishing).
+MIT. See [LICENSE](LICENSE).
