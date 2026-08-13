@@ -1,0 +1,15 @@
+# Personal configuration — never commit real paths/sources.
+config.toml
+config.local.toml
+*.local.toml
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# macOS
+.DS_Store

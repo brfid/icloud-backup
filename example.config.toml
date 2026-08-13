@@ -1,0 +1,36 @@
+# icloud_backup — example configuration.
+#
+# Copy to ~/.config/icloud_backup/config.toml (or point $ICLOUD_BACKUP_CONFIG at it)
+# and edit. This file is safe to commit; your real config, with your own paths, is not.
+
+# Folder inside iCloud Drive where archives are written. Apple sync carries them off-machine.
+dest_root = "~/Library/Mobile Documents/com~apple~CloudDocs/backups"
+
+# "gz" runs on any Python 3.11+. "zst" is smaller but needs Python 3.14+.
+compression = "gz"
+
+# The watchdog alarms if a source has no successful backup within this many hours.
+stale_hours = 36
+
+# Grandfather-father-son retention, applied per source (override per source below).
+[retention]
+daily = 7
+weekly = 4
+monthly = 12
+
+[[source]]
+name = "documents"
+path = "~/Documents"
+excludes = [".DS_Store"]
+
+[[source]]
+name = "code"
+path = "~/src"
+# Component-name globs; any path component matching is skipped (dirs are pruned).
+excludes = [".DS_Store", "__pycache__", "*.pyc", ".venv", "venv", "node_modules"]
+
+# [[source]]
+# name = "photos-library"
+# path = "~/Pictures/Family"
+# excludes = [".DS_Store"]
+# retention = { daily = 14, weekly = 8, monthly = 24 }   # per-source override
