@@ -1,26 +1,22 @@
 #!/usr/bin/env python3
-"""Datetime-stamped, compressed, self-contained backups into a local iCloud folder.
+"""Compressed, timestamped backups of chosen folders into a local iCloud Drive folder.
 
-Each run writes one independent ``<name>/<UTC-stamp>.tar.<ext>`` per configured
-source into ``dest_root`` (a folder inside iCloud Drive). Apple's own sync carries
-the archives off-machine — there is no cloud API, token, or credential to maintain.
+Each run writes one ``<name>/<UTC-stamp>.tar.<ext>`` per configured source under
+``dest_root``. iCloud syncs the archives off the machine, so there is no cloud API,
+token, or credential to maintain.
 
-Design choices that keep it simple and robust:
+Behavior:
 
-* **Full, self-contained snapshots.** Every archive stands alone, so pruning is a
-  plain file delete and restore is a single extract. There is no delta chain to break.
-* **Skip-if-unchanged.** Before archiving, the source is fingerprinted (path + size +
-  mtime of every non-excluded file). If nothing changed since the last snapshot, no
-  new archive is written — only a heartbeat is updated. Storage and upload churn then
-  track how often things actually change, not the schedule.
-* **GFS retention.** Keep the newest per day for N days, per week for M weeks, and per
-  month for K months. The most recent archive is always kept.
-* **Fail loudly.** Any source failing raises a macOS notification and drops a
-  ``⚠️ BACKUP FAILING.txt`` on the Desktop; a clean run clears it. A companion
-  ``watch.py`` catches the harder case — the job silently not running at all.
+* Snapshots are complete and independent, so a restore is one extract and a prune is
+  a file deletion.
+* A source is re-archived only when its fingerprint (relative path, size, and mtime of
+  every non-excluded file) changes; otherwise the run records a heartbeat and skips it.
+* Pruning keeps the newest snapshot per day, week, and month, and always keeps the
+  most recent one.
+* A failed source posts a macOS notification and writes a Desktop flag file; the
+  companion ``watch.py`` reports a source whose scheduled backup has stopped running.
 
-Pure standard library. gzip works on any Python 3.11+ (3.11 for ``tomllib``); zstd
-needs Python 3.14+.
+Pure standard library. gzip needs Python 3.11+ (for ``tomllib``); zstd needs 3.14+.
 
 Commands: ``run`` / ``list`` / ``verify`` / ``restore``.
 """
@@ -281,7 +277,7 @@ def iter_entries(root: Path, patterns: Sequence[str]) -> Iterator[tuple[Path, st
 def fingerprint(root: Path, patterns: Sequence[str]) -> str:
     """Compute a cheap change-detecting fingerprint of a directory.
 
-    Hashes the relative path, size, and mtime of every non-excluded file — the same
+    Hashes the relative path, size, and mtime of every non-excluded file, the same
     heuristic as rsync's default. A change that preserves all three is not detected.
 
     Args:
