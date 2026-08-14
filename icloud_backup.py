@@ -60,7 +60,7 @@ RUN_LOCK = STATE_DIR / ".run.lock"
 
 @dataclass(frozen=True)
 class Retention:
-    """How many snapshots to keep in each grandfather-father-son bucket."""
+    """GFS retention: how many snapshots to keep per bucket."""
 
     daily: int = 7
     weekly: int = 4
@@ -69,7 +69,7 @@ class Retention:
 
 @dataclass(frozen=True)
 class Source:
-    """One backup source: a named folder with optional excludes and retention."""
+    """A backup source: a named folder with optional excludes and retention override."""
 
     name: str
     path: Path
@@ -79,7 +79,7 @@ class Source:
 
 @dataclass(frozen=True)
 class Config:
-    """Loaded configuration: destination, compression, default retention, sources."""
+    """Loaded config: destination, compression, default retention, and sources."""
 
     dest_root: Path
     compression: str
@@ -88,11 +88,9 @@ class Config:
     sources: tuple[Source, ...] = field(default_factory=tuple)
 
     def dest_for(self, name: str) -> Path:
-        """Return the archive directory for the named source."""
         return self.dest_root / name
 
     def retention_for(self, source: Source) -> Retention:
-        """Return the source's own retention, falling back to the global default."""
         return source.retention or self.retention
 
 
@@ -101,18 +99,7 @@ def _expand(p: str) -> Path:
 
 
 def load_config(path: Path) -> Config:
-    """Load and validate the TOML config, expanding ``~`` in every path.
-
-    Args:
-        path: Path to the TOML config file.
-
-    Returns:
-        The parsed configuration.
-
-    Raises:
-        RuntimeError: If the file is missing, requests an unsupported compression,
-            or defines no ``dest_root`` / no ``[[source]]`` entries.
-    """
+    """Parse and validate the TOML config, expanding ``~``; raise RuntimeError if unusable."""
     if not path.is_file():
         raise RuntimeError(f"config not found: {path}")
     with path.open("rb") as handle:
@@ -166,15 +153,7 @@ def load_config(path: Path) -> Config:
 
 
 def selected_sources(config: Config, only: str | None) -> Iterator[Source]:
-    """Yield configured sources, optionally filtered to a single name.
-
-    Args:
-        config: Loaded configuration.
-        only: If given, yield only the source with this name.
-
-    Yields:
-        Each matching source, in config order.
-    """
+    """Config sources, optionally filtered to one by name."""
     for source in config.sources:
         if only is None or source.name == only:
             yield source
@@ -197,7 +176,7 @@ def utc_stamp(moment: dt.datetime | None = None) -> str:
 
 
 def notify(title: str, message: str) -> None:
-    """Post a macOS notification (best effort; never raises)."""
+    """Post a macOS notification; best effort, never raises."""
     try:
         script = (
             f"display notification {json.dumps(message)} "
@@ -230,6 +209,7 @@ def state_path(name: str) -> Path:
 
 
 def read_state(name: str) -> dict[str, object]:
+    """The source's last-run record, or {} if missing or unreadable."""
     try:
         return json.loads(state_path(name).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -249,17 +229,10 @@ def _excluded(component: str, patterns: Sequence[str]) -> bool:
 
 
 def iter_entries(root: Path, patterns: Sequence[str]) -> Iterator[tuple[Path, str, bool]]:
-    """Walk ``root``, yielding each non-excluded entry once.
+    """Yield ``(abs_path, relpath, is_dir)`` for non-excluded entries under root.
 
-    Excluded directories are pruned from the walk (their subtrees are never visited),
-    and entries come out in a deterministic order so the fingerprint is stable.
-
-    Args:
-        root: Directory to walk.
-        patterns: Component-name globs to exclude (e.g. ``node_modules``, ``*.pyc``).
-
-    Yields:
-        ``(absolute_path, path_relative_to_root, is_directory)`` for each entry.
+    Excluded directories are pruned from the walk; order is deterministic so the
+    fingerprint is stable.
     """
     for dirpath, dirnames, filenames in os.walk(root, topdown=True):
         dirnames[:] = sorted(d for d in dirnames if not _excluded(d, patterns))
@@ -275,17 +248,9 @@ def iter_entries(root: Path, patterns: Sequence[str]) -> Iterator[tuple[Path, st
 
 
 def fingerprint(root: Path, patterns: Sequence[str]) -> str:
-    """Compute a cheap change-detecting fingerprint of a directory.
+    """Change key: sha256 over (relpath, size, mtime) of non-excluded files.
 
-    Hashes the relative path, size, and mtime of every non-excluded file, the same
-    heuristic as rsync's default. A change that preserves all three is not detected.
-
-    Args:
-        root: Directory to fingerprint.
-        patterns: Component-name globs to exclude.
-
-    Returns:
-        A hex sha256 digest of the tree's metadata.
+    Rsync-style, so it misses an edit that preserves both size and mtime.
     """
     digest = hashlib.sha256()
     for abs_path, rel, is_dir in iter_entries(root, patterns):
@@ -308,22 +273,9 @@ def _fsync_dir(path: Path) -> None:
 
 
 def create_archive(source: Source, dest_dir: Path, stamp: str, compression: str) -> Path:
-    """Write one snapshot archive atomically and return its path.
+    """Write ``<dest_dir>/<stamp>.<ext>`` atomically (temp, fsync, rename).
 
-    The archive is built in a temporary ``.partial`` file, fsynced, then renamed into
-    place, so a crash never leaves a half-written archive that looks valid.
-
-    Args:
-        source: Source being archived; its ``path`` basename becomes the archive root.
-        dest_dir: Directory to write the archive into.
-        stamp: UTC timestamp used as the filename.
-        compression: ``"gz"`` or ``"zst"``.
-
-    Returns:
-        Path to the finished archive.
-
-    Raises:
-        Exception: Any error during archiving (the partial file is removed first).
+    The archive's top-level directory is the source folder's own name.
     """
     mode, ext = COMPRESSION[compression]
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -350,14 +302,7 @@ def create_archive(source: Source, dest_dir: Path, stamp: str, compression: str)
 
 
 def verify_archive(path: Path) -> bool:
-    """Return True if the archive reopens and holds at least one member.
-
-    Args:
-        path: Archive to check.
-
-    Returns:
-        True if readable and non-empty, else False.
-    """
+    """True if the archive reopens and holds at least one member."""
     try:
         with tarfile.open(path, "r:*") as tar:
             return any(True for _ in tar)
@@ -366,7 +311,7 @@ def verify_archive(path: Path) -> bool:
 
 
 def parse_stamp(name: str) -> dt.datetime | None:
-    """Parse the UTC timestamp from an archive filename, or None if it doesn't match."""
+    """Parse the UTC stamp from an archive filename, else None."""
     base = name.split(".", 1)[0]
     try:
         return dt.datetime.strptime(base, STAMP_FORMAT).replace(tzinfo=dt.UTC)
@@ -375,7 +320,7 @@ def parse_stamp(name: str) -> dt.datetime | None:
 
 
 def list_archives(dest_dir: Path) -> list[Path]:
-    """Return archive files in ``dest_dir``, oldest first (by timestamped name)."""
+    """Archive files in ``dest_dir``, oldest first."""
     if not dest_dir.is_dir():
         return []
     found = [
@@ -387,7 +332,7 @@ def list_archives(dest_dir: Path) -> list[Path]:
 
 
 def archives_by_stamp(dest_dir: Path) -> dict[dt.datetime, Path]:
-    """Map each archive's parsed UTC timestamp to its path (unparseable names skipped)."""
+    """Map each archive's parsed UTC stamp to its path."""
     return {
         stamp: path
         for path in list_archives(dest_dir)
@@ -399,18 +344,7 @@ def archives_by_stamp(dest_dir: Path) -> dict[dt.datetime, Path]:
 
 
 def gfs_keep(stamps: Sequence[dt.datetime], retention: Retention) -> set[dt.datetime]:
-    """Select which timestamps to keep under grandfather-father-son retention.
-
-    Keeps the newest snapshot in each of the most recent ``daily`` days, ``weekly``
-    ISO weeks, and ``monthly`` months; the single most recent snapshot is always kept.
-
-    Args:
-        stamps: All snapshot timestamps for one source.
-        retention: How many daily/weekly/monthly buckets to keep.
-
-    Returns:
-        The subset of ``stamps`` to retain; everything else may be pruned.
-    """
+    """Timestamps to keep: newest per day/week/month within the retention counts, plus the most recent."""
     if not stamps:
         return set()
     ordered = sorted(stamps, reverse=True)
@@ -437,15 +371,7 @@ def gfs_keep(stamps: Sequence[dt.datetime], retention: Retention) -> set[dt.date
 
 
 def prune(dest_dir: Path, retention: Retention) -> list[Path]:
-    """Delete archives outside the GFS keep-set.
-
-    Args:
-        dest_dir: A source's archive directory.
-        retention: Retention policy to apply.
-
-    Returns:
-        The archive paths that were deleted.
-    """
+    """Delete archives outside the GFS keep-set; return the deleted paths."""
     by_stamp = archives_by_stamp(dest_dir)
     keep = gfs_keep(list(by_stamp), retention)
     deleted = []
@@ -460,17 +386,9 @@ def prune(dest_dir: Path, retention: Retention) -> list[Path]:
 
 
 def backup_source(config: Config, source: Source) -> str:
-    """Back up one source: skip if unchanged, else archive, verify, prune, and record.
+    """Skip if unchanged, else archive, verify, prune, and record state.
 
-    Args:
-        config: Loaded configuration.
-        source: The source to back up.
-
-    Returns:
-        A one-line, human-readable summary of what happened.
-
-    Raises:
-        RuntimeError: If the source path is missing or the new archive fails verification.
+    Raises on a missing source path or an archive that fails verification.
     """
     if not source.path.is_dir():
         raise RuntimeError(f"source path not found: {source.path}")
@@ -504,7 +422,7 @@ def backup_source(config: Config, source: Source) -> str:
 
 @contextmanager
 def run_lock() -> Iterator[None]:
-    """Serialize runs; exit rather than let a manual run overlap the scheduled one."""
+    """Exclusive lock for a run; exit if another run already holds it."""
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     handle = open(RUN_LOCK, "w")
     try:
@@ -518,7 +436,7 @@ def run_lock() -> Iterator[None]:
 
 
 def cmd_run(config: Config, only: str | None) -> int:
-    """Back up every selected source, alarming loudly if any fails."""
+    """Back up the selected sources; alarm and return 1 if any fail."""
     with run_lock():
         failures: list[tuple[str, str]] = []
         for source in selected_sources(config, only):
@@ -544,7 +462,7 @@ def cmd_run(config: Config, only: str | None) -> int:
 
 
 def cmd_list(config: Config, only: str | None) -> int:
-    """List archives per source, marking which the next prune would keep or drop."""
+    """Print each source's snapshots and whether the next prune keeps them."""
     for source in selected_sources(config, only):
         by_stamp = archives_by_stamp(config.dest_for(source.name))
         keep = gfs_keep(list(by_stamp), config.retention_for(source))
@@ -560,7 +478,7 @@ def cmd_list(config: Config, only: str | None) -> int:
 
 
 def cmd_verify(config: Config, only: str | None) -> int:
-    """Reopen every archive and report readability; nonzero exit if any is bad."""
+    """Reopen every snapshot; nonzero exit if any is unreadable."""
     bad = 0
     for source in selected_sources(config, only):
         for path in list_archives(config.dest_for(source.name)):
@@ -571,7 +489,7 @@ def cmd_verify(config: Config, only: str | None) -> int:
 
 
 def cmd_restore(config: Config, name: str, at: str | None, target: str | None) -> int:
-    """Extract one source's snapshot (newest, or matching ``at``) to ``target``."""
+    """Extract a source's snapshot (newest, or matching ``at``) to ``target``."""
     archives = list_archives(config.dest_for(name))
     if not archives:
         raise RuntimeError(f"no archives for source '{name}'")
@@ -614,7 +532,7 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
 
 
 def resolve_config_path(explicit: Path | None) -> Path:
-    """Resolve the config path from ``--config``, then ``$ICLOUD_BACKUP_CONFIG``, then default."""
+    """Config path from ``--config``, then ``$ICLOUD_BACKUP_CONFIG``, then the default."""
     if explicit:
         return explicit
     env = os.environ.get("ICLOUD_BACKUP_CONFIG")

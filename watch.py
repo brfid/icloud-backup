@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Watchdog for icloud_backup — alarm loudly when a source stops backing up.
+"""Watchdog for icloud_backup: report when a source stops backing up.
 
-A backup job cannot reliably report its own *absence*: if its launchd agent is
-unloaded, the Mac was off, or a run hung, no error is ever produced. This runs
-independently (at login and periodically) and raises a macOS notification plus a
-Desktop flag if any source's last successful run is older than ``stale_hours`` —
-or if it never ran, or if the last run errored.
+A backup job cannot report its own absence: if its agent is unloaded, the Mac was
+off, or a run hung, no error is produced. This runs independently (at login and
+periodically) and raises a macOS notification plus a Desktop flag when any source's
+last successful run is older than ``stale_hours``, never ran, or errored.
 """
 
 from __future__ import annotations
@@ -19,14 +18,7 @@ import icloud_backup as ib
 
 
 def find_problems(config: ib.Config) -> list[str]:
-    """Return one message per source that is stale, errored, or never backed up.
-
-    Args:
-        config: Loaded backup configuration.
-
-    Returns:
-        A human-readable problem string per unhealthy source; empty if all are fresh.
-    """
+    """One message per source that is stale, errored, or never backed up; empty if all fresh."""
     now = dt.datetime.now().astimezone()
     problems: list[str] = []
     for source in config.sources:
@@ -60,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
         detail = "\n".join(f"- {p}" for p in problems)
         ib.notify("iCloud backup STALLED", f"{len(problems)} source(s) need attention")
         ib.raise_desktop_flag(
-            f"iCloud backup watchdog — {ib.now_iso()}\n\n{detail}\n\n"
+            f"iCloud backup watchdog: {ib.now_iso()}\n\n{detail}\n\n"
             "Check: icloud_backup.py list   (log: ~/Library/Logs/icloud-backup.log)\n"
         )
         print(detail, file=sys.stderr)
