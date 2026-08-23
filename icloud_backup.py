@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""Create and verify complete daily iCloud snapshots.
-
-Each run writes one independent <source>/<UTC timestamp>.tar.gz archive for
-every configured source. Completed archive filenames are the backup record; no
-repository database or program-specific restore command is required.
-
-Commands: run / status.
-"""
+"""Create verified full snapshots and report their health."""
 
 from __future__ import annotations
 
@@ -917,13 +910,13 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         type=Path,
         default=None,
         metavar="PATH",
-        help="read configuration from PATH instead of the default",
+        help="read configuration from PATH",
     )
     subcommands = parser.add_subparsers(dest="command", required=True)
     subcommands.add_parser(
         "run",
-        help="create one verified snapshot of every configured source",
-        description="Create one verified snapshot of every configured source.",
+        help="attempt one verified snapshot for every configured source",
+        description="Attempt one verified snapshot for every configured source.",
     )
     subcommands.add_parser(
         "status",

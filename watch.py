@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Report archive-based iCloud backup health independently of the backup job.
-
-A backup job cannot report its own absence. This watchdog runs at login and every
-six hours, reads completed archive filenames without opening their contents, and
-raises a persistent visible alarm when backup health is not clean.
-"""
+"""Check snapshot freshness and report failures."""
 
 from __future__ import annotations
 
@@ -30,7 +25,7 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=None,
         metavar="PATH",
-        help="read configuration from PATH instead of the environment or default",
+        help="read configuration from PATH",
     )
     args = parser.parse_args(argv)
 

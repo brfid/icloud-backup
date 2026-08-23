@@ -1,167 +1,133 @@
 # icloud_backup
 
-`icloud_backup` creates one complete, timestamped `.tar.gz` snapshot of every configured folder and writes it to iCloud Drive. With the documented 7/4/12 policy, a successful daily run keeps recovery points from the seven most recent represented UTC dates, four most recent represented ISO weeks, and twelve most recent represented UTC months.
+`icloud_backup` writes an independent, timestamped `.tar.gz` archive of each configured source to a destination, typically iCloud Drive. Every successful source backup creates a full, non-incremental archive subject to configured exclusions; recovery requires only Finder or `tar`.
 
-Each archive is independent and can be opened with Finder or standard `tar`; recovery never depends on this repository. The tool also reports a failed run immediately and uses an independent watchdog to report when scheduled snapshots stop appearing.
+After installation, the included `launchd` templates schedule daily backups and separate watchdog checks. Retention rotates daily, weekly, and monthly recovery points. Completed archive filenames are the backup record; the tool uses only the Python standard library and keeps no backup database.
 
 ## Requirements
 
-- macOS, for iCloud Drive, launchd scheduling, and notifications.
+- macOS.
 - Python 3.11 or later.
-- No third-party Python packages.
 
 ## Quick start
 
-1. Clone this repository and enter it, for example:
+1. Clone the repository:
 
    ```sh
-   mkdir -p ~/src
-   git clone https://github.com/brfid/icloud-backup.git ~/src/icloud-backup
-   cd ~/src/icloud-backup
+   git clone https://github.com/brfid/icloud-backup.git
+   cd icloud-backup
    ```
 
-2. Create the configuration directory, copy the example, and edit the destination and sources:
+2. Copy the example configuration, then edit `dest_root` and `[[source]]`:
 
    ```sh
    mkdir -p ~/.config/icloud_backup
    cp example.config.toml ~/.config/icloud_backup/config.toml
    ```
 
-3. Create and inspect the first snapshots:
+3. Create and inspect the first archives:
 
    ```sh
    python3 icloud_backup.py run
    python3 icloud_backup.py status
    ```
 
-4. Install the two launchd agents described in [Schedule backups](#schedule-backups).
+4. To automate backups, [schedule the launch agents](#schedule-backups).
 
-## Upgrade from earlier versions
+## Configure backups
 
-This release intentionally replaces skip-if-unchanged snapshots, JSON state, configurable compression, per-source retention, and repository-driven restore commands with complete daily gzip-tar snapshots whose filenames are the durable state.
+[example.config.toml](example.config.toml) defines the complete schema. The default config path is `~/.config/icloud_backup/config.toml`.
 
-Before the first upgraded `run`:
+`dest_root` is the archive directory. The global `daily`, `weekly`, and `monthly` retention values must be positive integers. Each `[[source]]` requires a unique, simple `name` for its archive subdirectory and a `path` to back up. Optional `excludes` values are component-name globs; matches skip files or entire directory trees.
 
-1. Remove `compression`, `stale_hours`, and every per-source `retention` value from the installed config. The strict schema rejects these obsolete keys instead of silently ignoring them.
-2. Existing timestamped `.tar.gz` archives remain compatible. For each important legacy gzip archive that is already local, run `gzip -t "/path/to/archive.tar.gz" && tar -tzf "/path/to/archive.tar.gz" >/dev/null` once before allowing the upgraded run to prune it. Do not bulk-open cloud-only archives unless you intend to download them.
-3. Legacy `.tar.zst` archives are left untouched but are not reported or pruned by this version. Keep them separately and retain a zstd-capable tool for restoring them.
-4. The old state under `~/.local/state/icloud_backup/` is no longer read. It may remain without affecting backups.
-5. Replace both installed launch-agent copies with the updated templates, reapply the local paths and labels, and reload them as described in [Schedule backups](#schedule-backups). A Git pull does not update files already copied into `~/Library/LaunchAgents/`.
+Configured destination and source paths must be absolute or begin with `~`. The tool resolves them and rejects overlapping sources, sources that overlap the destination, and unknown configuration keys.
 
-The old `list`, `verify`, and `restore` commands and the `run --only` option no longer exist. Use `status`, Finder or standard `tar`, and full all-source runs instead. Run `status` and one manual `run` successfully before relying on the schedule again.
-
-## Configure
-
-The configuration contains one destination, one global retention policy, and one or more sources:
-
-```toml
-dest_root = "~/Library/Mobile Documents/com~apple~CloudDocs/backups"
-
-[retention]
-daily = 7
-weekly = 4
-monthly = 12
-
-[[source]]
-name = "documents"
-path = "~/Documents"
-excludes = [".DS_Store", "node_modules", "*.pyc"]
-```
-
-The schema is strict: unknown keys are errors, so a misspelled or obsolete setting cannot be silently ignored.
-
-- `dest_root` is the folder that will contain one archive subfolder per source.
-- `retention.daily`, `retention.weekly`, and `retention.monthly` are required positive integers and apply to every source.
-- `source.name` must be unique and must be a simple name, not `.`, `..`, or a value containing a path separator.
-- `source.path` must name the directory to snapshot.
-- `source.excludes` is optional. Each value is a component-name glob; a matching file or directory is skipped, and the tool does not descend into a matching directory.
-
-Paths beginning with `~` are expanded and every path is resolved before use. Other relative paths are rejected. Source directories must not overlap one another or the destination tree; these checks prevent duplicate coverage and prevent an archive from ingesting previous backups or its own partial output.
-
-The default config path is `~/.config/icloud_backup/config.toml`. To use another file, put `--config` before the command or set `ICLOUD_BACKUP_CONFIG`:
+To use another config, set `ICLOUD_BACKUP_CONFIG` or put `--config` before the command:
 
 ```sh
 python3 icloud_backup.py --config /absolute/path/config.toml status
 ```
 
-## Use
+## Run backups and inspect status
 
-`icloud_backup` has two user-facing commands:
-
-- `python3 icloud_backup.py run` snapshots every configured source, then applies retention after each successful publication. A nonblocking process lock prevents manual and scheduled runs from overlapping.
-- `python3 icloud_backup.py status` reports each source’s newest snapshot, its age, the archive count, and the daily, weekly, or monthly reasons each archive is retained. It reads filenames rather than archive contents, so checking status does not download cloud-only archives.
-
-Every run creates a new full snapshot for every source, even when its contents have not changed.
-
-## Restore files
-
-Choose a timestamped `.tar.gz` under `dest_root`, then copy or download it to a recovery folder outside the backup tree before opening that copy with Finder and Archive Utility. Archive Utility normally extracts beside the archive; using a separate recovery folder avoids placing an extracted source tree among the managed backups. Inspect the result before copying back the files you need.
-
-The equivalent standard `tar` command is:
-
-```sh
-mkdir -p ~/Desktop/icloud-backup-recovery
-tar -xzf "/path/to/20260823T030000Z.tar.gz" -C ~/Desktop/icloud-backup-recovery
-```
-
-The archive contains the source folder as its top-level directory. If Optimize Mac Storage has evicted the archive’s local contents, opening or extracting it causes macOS to download it first.
+- `python3 icloud_backup.py run` attempts a new full archive for every source, even when its contents have not changed. It prunes a source only after publishing its new archive. A nonblocking lock makes a concurrent run log a skip and exit with status 2.
+- `python3 icloud_backup.py status` reports freshness, archive count, retention reasons, and health warnings without opening or downloading archive contents. Freshness or read problems exit 1; excess or unrecognized-filename warnings alone exit 0.
 
 ## Schedule backups
 
-The `launchd/` directory contains two agent templates:
+The `launchd/` directory contains two templates:
 
-- `com.example.icloud-backup.plist` runs `run` daily at 03:00.
-- `com.example.icloud-backup-watch.plist` runs the watchdog at login and every six hours.
+- `com.example.icloud-backup.plist` runs a backup daily at 03:00. If the Mac is asleep, `launchd` runs one current backup after wake; it does not backfill missed days.
+- `com.example.icloud-backup-watch.plist` checks backup health at login and every six hours.
 
-Copy both templates to `~/Library/LaunchAgents/`, set their labels and repository paths, and optionally add `ICLOUD_BACKUP_CONFIG` inside `EnvironmentVariables`. A launchd config value must be an absolute path such as `/Users/USERNAME/.config/icloud_backup/config.toml`; launchd does not expand `~`. Ensure Python 3.11 or later is available on each template’s configured `PATH`, then load each agent:
+Copy both files to `~/Library/LaunchAgents/`. In each copy, set `Label`, replace every `/Users/USERNAME` path, and ensure the configured `PATH` resolves Python 3.11 or later. To use a nondefault config, add `ICLOUD_BACKUP_CONFIG` to both agents with an absolute path; `launchd` does not expand `~`.
+
+Load each agent:
 
 ```sh
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<label>.plist
 ```
 
-To replace an agent that is already loaded, unload it before copying the edited replacement and load it again afterward:
+To update a loaded agent, run `bootout`, replace the copied file, and run `bootstrap` again. Pulling this repository does not update installed copies.
 
 ```sh
 launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/<label>.plist
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<label>.plist
 ```
 
-The templates start with Apple’s stable `/usr/bin/env` and resolve `python3` through a `PATH` covering Apple Silicon Homebrew, Intel Homebrew or python.org, and system locations. Replacing a Python installation therefore does not invalidate launchd’s cached executable requirement. If the Mac is asleep at 03:00, launchd starts one current run after wake; it cannot recreate snapshots for the time it was asleep.
+## Restore files
+
+Copy or download the selected `.tar.gz` archive to a recovery directory outside `dest_root`. Open the copy with Finder or extract it with `tar`. This keeps recovery output out of the managed backup tree.
+
+```sh
+mkdir -p ~/Desktop/icloud-backup-recovery
+tar -xzf "/path/to/20260823T030000Z.tar.gz" -C ~/Desktop/icloud-backup-recovery
+```
+
+The archive contains the source folder as its top-level directory. Opening a cloud-only archive downloads it first.
 
 ## Safety model
 
-### Full verification and publication
+### Archive publication
 
-For each source, `run` first confirms that the source is a readable directory and still satisfies the path-safety rules. It then creates a uniquely named hidden partial file in the final destination directory, adds the source tree once while applying exclusions, flushes and syncs the file, and fully reads the gzip stream to EOF to check its CRC and length. It also requires a readable, nonempty tar member list.
-
-Only after those checks pass does the tool atomically rename the partial file to `<UTC timestamp>.tar.gz` and sync the destination directory. A final archive published by this version has therefore completed local gzip and tar checks. A failure before publication removes only the partial file; a failure after publication leaves the verified final archive untouched. No archive-creation or publication failure prunes or replaces a completed archive.
+`run` writes, syncs, and fully validates a same-directory partial archive. It publishes and syncs the archive without replacing an existing file, then prunes. A failure before publication attempts to remove the partial. No publication failure replaces or prunes a completed archive.
 
 ### Retention
 
-Retention processes recognized archive timestamps newest first and keeps the newest archive from each of the seven most recent represented UTC dates, four most recent represented ISO weeks, and twelve most recent represented UTC calendar months. It also keeps the newest archive unconditionally and takes the union of all four sets.
+Retention keeps the newest archive from each of the configured number of represented UTC dates, ISO weeks, and UTC months, then takes the union. After successful pruning, the default 7/4/12 policy retains at most 23 recognized archives per source and normally fewer. These are represented calendar buckets, not age windows; a missed period can leave an older recovery point.
 
-The documented 7/4/12 policy keeps at most 23 archives per source and normally fewer because one snapshot can represent its date, week, and month. With other positive retention counts, the upper bound is their sum. These are represented calendar buckets, not exact ages: missed weeks or months can leave an older recovery point without increasing the configured limit.
+Pruning deletes only recognized timestamped archives and ignores partial and unrecognized filenames. A recognized timestamp more than five minutes in the future blocks cleanup. A cleanup failure reports an error and can leave extra archives for a later run.
 
-Pruning starts only after a new archive has passed every publication check. Partial files and unrecognized filenames are ignored. If a recognized archive timestamp is implausibly in the future, all destructive cleanup is refused until the clock or filename is corrected. If a deletion fails, the extra completed archive remains, the failure is reported, and cleanup is retried on a later run.
+### Failure detection
 
-### Alarms and watchdog
+A source failure is logged, triggers a best-effort macOS notification, and tries to write `⚠️ BACKUP FAILING.txt` on the Desktop. It does not stop the remaining sources, and the run exits nonzero. Only a completely successful run clears the file.
 
-On an error, `run` writes a log entry, posts a macOS notification, writes `⚠️ BACKUP FAILING.txt` on the Desktop, and returns a nonzero status. If the Desktop alarm itself cannot be written, that failure is printed to the launchd log or terminal without hiding the original backup error. The independent watchdog uses the same archive-based health calculation as `status` and raises the alarm if an archive directory cannot be read, a source has never completed a snapshot, its newest timestamp is implausibly in the future, or its newest snapshot exceeds the fixed 36-hour threshold.
+The separately scheduled watchdog raises the same alarm when it cannot check the config or archive directories, a source has no archive, the newest timestamp is more than five minutes in the future, or the newest archive is more than 36 hours old. Warnings for excess archives or unrecognized filenames alone do not alarm. The watchdog never clears the alarm.
 
-The watchdog never clears the Desktop alarm. A `run` clears it only when every source published a checked snapshot during that run, all retention cleanup succeeded, and no other error occurred, so one healthy source cannot hide another source’s failure.
+## Limitations
 
-## iCloud and format limitations
+- A healthy daily schedule can lose about one day of changes; sleep or failures can extend that interval.
+- For an iCloud destination, local verification does not confirm upload. `status` and the watchdog read filenames only, so they cannot detect later corruption, replacement, or an unverified legacy archive. Periodically restore from iCloud.com or another device.
+- Gzip and tar do not encrypt archives or preserve every macOS-specific metadata type.
+- Sources that also sync through the destination's iCloud account share a failure domain with the archives.
+- Each run needs transient local space for a full archive. For an iCloud destination, each archive must fit iCloud Drive's per-item limit, and macOS can evict its local contents. Reading cloud-only source files downloads them.
+- A source can change while read, so an archive is not an atomic filesystem snapshot.
 
-- A daily schedule can leave up to roughly one day of changes between snapshots.
-- The tool confirms the completed local archive, but it cannot confirm that iCloud uploaded it. Check Finder’s iCloud Status and periodically perform a recovery from iCloud.com or another device for an end-to-end test.
-- Gzip provides compression, not encryption. This tool does not add archive encryption; use the iCloud account protections appropriate for the sensitivity of the source data.
-- Optimize Mac Storage may evict completed archives when local space is needed, but it neither deletes the cloud copy nor guarantees immediate eviction. Reading cloud-only source files materializes them locally, and creating a new archive requires enough transient local space for one complete snapshot.
-- Keep each source comfortably below iCloud Drive’s individual-item size limit because each snapshot is one file.
-- A source can change while it is read, so an archive is not an atomic filesystem snapshot. Schedule runs while sources are normally quiet.
-- Standard tar preserves ordinary files, directories, permissions, and symlinks, but it is not a full macOS system-backup format; application-specific extended attributes, ACLs, and other metadata may require separate protection.
-- The archives help recover unwanted changes and deletions, but sources and snapshots in the same iCloud account still share an account and synchronization domain.
-- Historical archives are not routinely reopened because doing so can download evicted iCloud content. Filename-only status cannot detect later corruption, manual replacement, or an unverified legacy file with a valid timestamp name. Archives published by this version are fully checked before publication; periodic end-to-end recoveries provide the operational check after upload.
-- Path-safety checks assume other processes running as the same user are not deliberately swapping source or destination ancestors during a backup. That user can already alter the source and completed archives directly.
+## Upgrade from versions with JSON state
+
+Before the first upgraded `run`:
+
+1. Remove `compression`, `stale_hours`, and source-level `retention` settings. The current schema rejects them.
+2. Validate each important legacy `.tar.gz` that is already local before allowing retention to prune it. Do not bulk-open cloud-only archives unless you intend to download them.
+
+   ```sh
+   gzip -t "/path/to/archive.tar.gz" && tar -tzf "/path/to/archive.tar.gz" >/dev/null
+   ```
+
+3. Keep legacy `.tar.zst` archives separately; this version neither reports nor prunes them.
+4. Replace both installed launch-agent files with the current templates, reapply local paths and labels, and reload them.
+
+State under `~/.local/state/icloud_backup/` is ignored and can remain. The former `list`, `verify`, and `restore` commands and `run --only` option no longer exist; use `status`, Finder, or `tar`. Complete one manual `run`, then confirm `status` before relying on the schedule.
 
 ## License
 

@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Template for the watchdog. Runs at login (RunAtLoad) and every 6 hours; alarms
-     if any source has gone stale. Copy to ~/Library/LaunchAgents/ and adjust paths. -->
+<!-- After copying to ~/Library/LaunchAgents/, set Label and paths. Checks at login and every six hours. -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>

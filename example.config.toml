@@ -1,12 +1,9 @@
-# icloud_backup — example configuration.
-#
-# Copy to ~/.config/icloud_backup/config.toml (or point $ICLOUD_BACKUP_CONFIG at it)
-# and edit. Unknown keys are rejected, so keep only the settings shown here.
+# Copy to ~/.config/icloud_backup/config.toml and edit.
 
-# Local iCloud Drive folder where macOS will synchronize the completed archives.
+# iCloud Drive archive destination.
 dest_root = "~/Library/Mobile Documents/com~apple~CloudDocs/backups"
 
-# One global grandfather-father-son policy for every source. Counts must be positive integers.
+# Retention for every source. Values must be positive integers.
 [retention]
 daily = 7
 weekly = 4
@@ -15,15 +12,10 @@ monthly = 12
 [[source]]
 name = "documents"
 path = "~/Documents"
-# Component-name globs; matching files and directories are skipped.
+# Globs match file or directory names, not paths.
 excludes = [".DS_Store"]
 
 [[source]]
 name = "code"
 path = "~/src"
 excludes = [".DS_Store", "__pycache__", "*.pyc", ".venv", "venv", "node_modules"]
-
-# [[source]]
-# name = "photos-library"
-# path = "~/Pictures/Family"
-# excludes = [".DS_Store"]
