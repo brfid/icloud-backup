@@ -73,7 +73,7 @@ The `launchd/` directory holds two agent templates:
 - `com.example.icloud-backup.plist` runs a backup daily at 03:00.
 - `com.example.icloud-backup-watch.plist` runs the watchdog at login and every six hours.
 
-Copy each template to `~/Library/LaunchAgents/`, set the `Label`, the Python interpreter path, and the script path, then load it:
+Copy each template to `~/Library/LaunchAgents/`, set the `Label` and script path, and ensure Python 3.11 or later is available on the configured `PATH`, then load it. The templates start with Apple’s stable `/usr/bin/env` launcher and resolve `python3` at runtime so a Homebrew Python update does not invalidate launchd's cached code requirement:
 
 ```
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<label>.plist

@@ -8,7 +8,8 @@
     <string>com.example.icloud-backup-watch</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/opt/homebrew/bin/python3</string>
+        <string>/usr/bin/env</string>
+        <string>python3</string>
         <string>/Users/USERNAME/src/icloud-backup/watch.py</string>
     </array>
     <key>RunAtLoad</key>
