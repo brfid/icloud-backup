@@ -1,21 +1,24 @@
-# Copy to ~/.config/icloud_backup/config.toml and edit.
-
-# iCloud Drive archive destination.
+# Copy to ~/.config/icloud_backup/config.toml; keep real paths out of Git.
 dest_root = "~/Library/Mobile Documents/com~apple~CloudDocs/backups"
 
-# Retention for every source. Values must be positive integers.
 [retention]
-daily = 7
-weekly = 4
-monthly = 12
+daily = 14
+weekly = 8
+monthly = 24
+
+# Optional; defaults suit an Apple Silicon Mac with Homebrew.
+[runtime]
+restic = "/opt/homebrew/bin/restic"
+reserve_mib = 1024
+timeout_hours = 6
+
+[[source]]
+name = "projects"
+path = "~/src"
+excludes = [".DS_Store", ".git", "*.git", "node_modules", "__pycache__", "*.pyc", ".venv"]
 
 [[source]]
 name = "documents"
-path = "~/Documents"
-# Globs match file or directory names, not paths.
-excludes = [".DS_Store"]
-
-[[source]]
-name = "code"
-path = "~/src"
-excludes = [".DS_Store", "__pycache__", "*.pyc", ".venv", "venv", "node_modules"]
+path = "~/Documents/Example"
+excludes = [".DS_Store", ".git", "*.git"]
+# Set allow_empty = true only when an empty source is intentional.

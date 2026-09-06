@@ -1,0 +1,35 @@
+iCloud Backup recovery
+
+This repository uses Restic with an empty password. There is no password or
+separate recovery key to remember. Keep the entire restic-v2 folder, including
+config and keys. Those files are required even though the password is empty.
+
+On another Mac, sign in to iCloud Drive and install Restic 0.19.1 or later.
+The default repository is iCloud Drive/backups/restic-v2. Adjust the location
+below if your backup configuration used a different destination.
+
+List completed recovery points:
+
+  restic -r "$HOME/Library/Mobile Documents/com~apple~CloudDocs/backups/restic-v2" --insecure-no-password snapshots --tag icloud-backup-v2,complete
+
+Inspect one snapshot to find its original source path:
+
+  restic -r "$HOME/Library/Mobile Documents/com~apple~CloudDocs/backups/restic-v2" --insecure-no-password cat snapshot SNAPSHOT_ID
+
+Restore the selected source into a new, empty folder. Replace SNAPSHOT_ID and
+/original/source/path with values from the commands above:
+
+  restic -r "$HOME/Library/Mobile Documents/com~apple~CloudDocs/backups/restic-v2" --insecure-no-password restore 'SNAPSHOT_ID:/original/source/path' --target "$HOME/Downloads/recovered-backup" --verify
+
+Reading files normally asks iCloud to download them. If a download stalls, use
+Finder's Download Now on the backup folder, let it finish, and retry. Restoring
+requires local space for both downloaded backup data and recovered files.
+
+The installer keeps a copy of the configuration beside this guide. Paths and
+settings may need updating on a new Mac. Application state and cache from the
+old Mac are not needed for the Restic commands above. Only one Mac should
+write to this repository; other Macs should restore from it.
+
+Backup completion means local creation and checks passed. iCloud uploads are
+asynchronous and are not monitored by this app. Allow iCloud to finish syncing
+before expecting the newest snapshot to be available on another Mac.
