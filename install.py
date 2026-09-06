@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install a stable runtime and two user launchd jobs on macOS."""
+"""Deploy copies of this checkout as a stable macOS runtime and two launchd jobs."""
 import argparse
 import datetime as dt
 import json
@@ -17,6 +17,11 @@ import icloud_backup as ib
 
 
 def plans(home, config, interpreter, label):
+    """Build deployment paths, shortcut text, and plists without writing files.
+
+    All entry points select the same config explicitly and run installed copies.
+    These fixed deployment paths are separate from Config runtime overrides.
+    """
     runtime = home/'Library/Application Support/icloud-backup/runtime'
     runner, watcher = runtime/'icloud_backup.py', runtime/'watch.py'
     agents, logs = home/'Library/LaunchAgents', home/'Library/Logs'
@@ -32,6 +37,7 @@ def plans(home, config, interpreter, label):
 
 
 def stable_python():
+    """Prefer a supported Homebrew command that survives routine version upgrades."""
     for path in ['/opt/homebrew/bin/python3', '/usr/local/bin/python3', sys.executable]:
         if Path(path).is_file():
             result = subprocess.run([path, '-c', 'import sys; print(int(sys.version_info >= (3, 11)))'], capture_output=True, text=True, check=True)
@@ -41,6 +47,13 @@ def stable_python():
 
 
 def install(config_path, label, initialize):
+    """Replace a deployment, preserve private rollback files, and load its jobs.
+
+    This unloads the selected jobs and may start a due backup after installation.
+    It exports recovery copies but never overwrites the selected active config.
+    Existing installations must supply their actual config and base label; label
+    discovery and changing unrelated jobs are not responsibilities of this call.
+    """
     if sys.platform != 'darwin':
         raise RuntimeError('launchd installation requires macOS')
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.-]+', label):

@@ -4,41 +4,28 @@
 
 **Date:** 2026-09-05
 
-**Decider:** Mac owner
-
 ## Context
 
-The previous implementation wrote complete compressed archives and implemented its own retention. The owner wants incremental daily snapshots with 14 daily, 8 weekly, and 24 monthly recovery points, accepts downloading cloud data for recovery, and wants no new password. Available local space is limited. iCloud syncing is trusted and its failures will be handled through iCloud rather than a custom upload monitor. The original source folders are the scope, with Git metadata excluded.
+The previous implementation wrote complete compressed archives and maintained custom retention. The desired replacement needs incremental storage and calendar history, limited local space, and no additional password. Downloading cloud data during recovery is acceptable. iCloud syncing is trusted; a separate upload monitor is outside the intended scope.
 
 ## Decision
 
-Use Restic 0.19.1 or later with `--insecure-no-password` and one repository directly in iCloud Drive. Keep only disposable metadata cache and operational state outside iCloud. Use standard macOS download-on-read behavior. A native eviction test confirmed incremental backup, restored versions/deletions, full checks, and pruning without a permanent local mirror. A small installed Python runner owns scheduling and safety checks; Restic owns storage and calendar retention.
-
-```mermaid
-flowchart LR
-  Sources[Configured source folders] --> Runner[Installed runner]
-  Scheduler[Daily launchd job] --> Runner
-  Runner --> Restic[Restic]
-  Restic --> Repository[Repository in iCloud Drive]
-  Repository --> iCloud[iCloud asynchronous sync]
-  Watchdog[Separate six-hour watchdog] --> State[Local status and job checks]
-  State --> Alert[Desktop warning and notification]
-```
+Use Restic's supported empty-password mode with one backup store directly in iCloud Drive, plus disposable local metadata cache. Use native download-on-read behavior. A small installed runner coordinates local operations; a separate watchdog can report runner failures. Restic owns storage and retention. The current mechanics and tested limits belong to [architecture](architecture.md), and current settings belong to [configuration](configuration.md).
 
 ## Options considered
 
 | Option | Benefit | Cost or limitation |
 | --- | --- | --- |
 | Full compressed archives | Independently readable dated files | Repeated full writes and cloud storage; custom retention |
-| Restic directly in iCloud | Mature incremental storage and retention; tested cloud eviction behavior | Shared repository must remain intact; iCloud remote syncing is asynchronous |
-| Complete local repository plus upload copy | Easier separation of local operation from cloud transfer | Permanent local space and extra transfer/recovery machinery |
-| Kopia or another repository engine | Mature alternative snapshot engines | Switching would require separate eviction and consistency validation |
+| Restic directly in iCloud | Mature incremental storage and retention; tested native eviction behavior | Shared store must remain intact; remote syncing is asynchronous |
+| Complete local store plus upload copy | Separates local operation from cloud transfer | Permanent local space and extra transfer/recovery machinery |
+| Another snapshot engine | Mature alternatives exist | Each engine needs separate eviction and consistency validation |
 
 ## Consequences
 
-No separate password, recovery key escrow, transfer service, or iCloud health checker is needed. The whole repository, including internal key metadata, must survive. The system reports local completion without asserting remote upload. A single Mac writes; other Macs restore after syncing. Engine operations can trigger downloads and pause on insufficient space. Monthly cleanup removes wholly unused packs without repacking shared packs, so some obsolete data can remain inside shared files. This does not make asynchronous cloud sync transactional.
+Recovery needs the complete backup store but no separately remembered secret. Users rely on Mac/iCloud access controls for privacy. Local completion cannot assert remote availability. Avoiding repacks reduces shared-file rewriting and downloads while permitting some obsolete bytes to remain. These are deliberate tradeoffs rather than a transactional guarantee from iCloud.
 
-Revisit storage cleanup if wasted cloud space becomes significant, and revisit the destination if multiple writers, independently confirmed off-device completion, or strict remote consistency becomes a requirement. Application-consistent database and game backups require application-specific quiet periods or exports.
+Revisit cleanup if wasted cloud space becomes significant. Revisit the destination if multiple writers, independently confirmed off-device completion, or strict remote consistency become requirements. The [operations guide](operations.md) owns installation and recovery procedures; this decision record is not a second runbook.
 
 ## References
 

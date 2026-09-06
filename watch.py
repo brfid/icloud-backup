@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Independent watchdog: can report a missing or broken backup runner."""
+"""Supervise the runner through JSON status, including when it cannot start.
+
+Keep this module independent of runner imports so its fallback alert still works
+when that file is missing or broken. Operational health rules remain in the runner.
+"""
 import argparse
 import datetime as dt
 import json
@@ -12,6 +16,7 @@ import tomllib
 
 
 def main(argv=None):
+    """Read runner status with a deadline; independently surface failures as alerts."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--runner', type=Path, default=Path(__file__).with_name('icloud_backup.py'))
     parser.add_argument('--config', type=Path, default=Path.home()/'.config/icloud_backup/config.toml')

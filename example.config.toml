@@ -1,4 +1,7 @@
-# Copy to ~/.config/icloud_backup/config.toml; keep real paths out of Git.
+# TEMPLATE ONLY: the running installation never reads this file.
+# Copy to a private config and edit its sources before a new installation.
+# See docs/configuration.md for the schema and docs/operations.md for discovery.
+# Keep real machine paths and source inventories out of Git.
 dest_root = "~/Library/Mobile Documents/com~apple~CloudDocs/backups"
 
 [retention]

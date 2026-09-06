@@ -2,6 +2,20 @@
 config.toml
 config.local.toml
 *.local.toml
+config-at-install.toml
+
+# Local deployment, recovery data, and diagnostics never belong in source control.
+/state/
+/runtime/
+/migration/
+/backups/
+/restic-v2/
+/restic-v2-recovery/
+state.json
+*.log
+.env
+.env.*
+!.env.example
 
 # Python
 __pycache__/

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Small macOS runner for password-free Restic backups in iCloud Drive."""
+"""Back up configured macOS folders through password-free Restic and local checks."""
 from __future__ import annotations
 
 import argparse
@@ -47,6 +47,7 @@ def log(message):
 
 
 def atomic_write(path, text, mode=0o600):
+    """Publish text with a synced temporary file and atomic replacement."""
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd, name = tempfile.mkstemp(prefix='.writing-', dir=path.parent)
     try:
@@ -95,6 +96,7 @@ def overlaps(a, b):
 
 @dataclass(frozen=True)
 class Source:
+    """A named working folder with component exclusions and an empty-source policy."""
     name: str
     path: Path
     excludes: tuple[str, ...] = ()
@@ -103,6 +105,7 @@ class Source:
 
 @dataclass(frozen=True)
 class Config:
+    """Operating policy from private TOML, independent of the source checkout."""
     dest_root: Path
     sources: tuple[Source, ...]
     daily: int = 14
@@ -121,10 +124,12 @@ class Config:
 
     @property
     def signature(self):
+        """Fingerprint source coverage for due checks, excluding other runtime policy."""
         content = [(s.name, str(s.path), s.excludes, s.allow_empty) for s in self.sources]
         return hashlib.sha256(json.dumps(content).encode()).hexdigest()
 
     def validate_paths(self):
+        """Reject aliases and recursive/overlapping roots using resolved macOS paths."""
         private = [self.dest_root, self.state_dir, self.cache_dir]
         if any(overlaps(a, b) for i, a in enumerate(private) for b in private[i+1:]):
             raise ValueError('destination, state, and cache directories must not overlap')
@@ -141,6 +146,11 @@ class Config:
 
 
 def load_config(path):
+    """Parse one explicitly selected TOML file and reject unsafe or unknown settings.
+
+    The example configuration and current checkout are never implicit fallbacks.
+    No files are created or migrated here.
+    """
     with path.open('rb') as f:
         raw = tomllib.load(f)
     unknown(raw, ['dest_root', 'retention', 'source', 'runtime'], 'configuration')
@@ -178,6 +188,7 @@ class Busy(RuntimeError):
 
 @contextmanager
 def run_lock(path):
+    """Hold a nonblocking local operation lock; raise Busy on contention."""
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     with path.open('a') as f:
         try:
@@ -188,6 +199,7 @@ def run_lock(path):
 
 
 def stop_child(p):
+    """Terminate the owned engine process group and reap its leader."""
     if p.poll() is None:
         os.killpg(p.pid, signal.SIGTERM)
         try:
@@ -198,6 +210,7 @@ def stop_child(p):
 
 
 def preflight_source(source):
+    """Reject missing/empty sources and legacy placeholders without reading payloads."""
     if not source.path.is_dir():
         raise RuntimeError(f'{source.name}: source directory is missing')
     def excluded(name):
@@ -226,6 +239,7 @@ def notify(message):
 
 
 class App:
+    """Own local orchestration and status; delegate backup storage to Restic."""
     def __init__(self, config):
         self.c = config
         self.state_file = config.state_dir / 'state.json'
@@ -255,6 +269,12 @@ class App:
                 raise RuntimeError(f'less than {self.c.reserve_mib} MiB immediately free; stopped to preserve space')
 
     def engine(self, *args, extra_space=()):
+        """Run Restic with explicit repository, empty password, and local guards.
+
+        Capture private diagnostics, scrub inherited RESTIC_* settings, and stop
+        the child process group on interruption, timeout, or low free space.
+        Callers serialize repository operations with run_lock.
+        """
         self.c.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         logs = self.c.state_dir / 'commands'
         logs.mkdir(exist_ok=True, mode=0o700)
@@ -297,6 +317,11 @@ class App:
             raise RuntimeError('repository identity is not registered or does not match; use init or connect explicitly')
 
     def initialize(self, connect=False):
+        """Explicitly create or verify/register a store; never replace its identity.
+
+        Connecting checks all stored data but does not reconstruct source status.
+        Normal backup runs call identity(), not this provisioning operation.
+        """
         with run_lock(self.c.state_dir / 'run.lock'):
             if connect:
                 if not (self.c.repository / 'config').is_file():
@@ -320,12 +345,19 @@ class App:
             log('repository ready; no password is required')
 
     def retain(self):
+        """Apply Restic policy to managed complete snapshots, grouped by source path."""
         # Group by paths, not tags: run tags change every day and must not create groups.
         self.engine('forget', '--tag', f'{MANAGED},complete', '--group-by', 'paths',
                     '--keep-last', '1', '--keep-daily', str(self.c.daily),
                     '--keep-weekly', str(self.c.weekly), '--keep-monthly', str(self.c.monthly))
 
     def run(self):
+        """Capture and check sources under one lock before allowing retention.
+
+        Successful peers can gain completed recovery points when another source
+        fails. Any source/check failure skips retention and records an alert.
+        Pending snapshots never count as completed recovery points.
+        """
         with run_lock(self.c.state_dir / 'run.lock'):
             started = now()
             run_tag = 'run:' + uuid.uuid4().hex
@@ -404,6 +436,7 @@ class App:
                 raise
 
     def due(self, local_now=None):
+        """Decide whether local scheduling, a source change, or failure requires work."""
         if self.state.get('last_error') or self.state.get('config_signature') != self.c.signature:
             return True
         last = self.state.get('last_success')
@@ -416,6 +449,11 @@ class App:
         return parse_time(last) < scheduled.astimezone(dt.UTC)
 
     def problems(self, check_scheduler=True):
+        """Read local coverage and deployment health without scanning stored data.
+
+        This is the shared health policy used by status and the watchdog. It
+        makes no claim about iCloud upload completion or off-device availability.
+        """
         problems = []
         if not (self.c.repository / 'config').is_file():
             problems.append('repository is missing')
@@ -478,6 +516,7 @@ class App:
         return 1 if problems else 0
 
     def restore(self, source_name, snapshot, target):
+        """Restore a completed point into an isolated empty target and verify it."""
         source = next((s for s in self.c.sources if s.name == source_name), None)
         if source is None:
             raise ValueError('unknown source name')
