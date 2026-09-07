@@ -40,6 +40,37 @@ class Fixture(unittest.TestCase):
         self.tmp.cleanup()
 
 
+class EngineIO(Fixture):
+    def test_retry_diagnostics_do_not_corrupt_successful_json(self):
+        engine = self.root/'engine'
+        engine.write_text('#!/bin/sh\necho "transient cloud read; retrying" >&2\necho \'{"id":"fixture"}\'\n')
+        engine.chmod(0o700)
+        self.app.c = dataclasses.replace(self.c, restic=str(engine))
+        self.assertEqual(json.loads(self.app.engine('cat', 'config')), {'id': 'fixture'})
+        diagnostic = next((self.c.state_dir/'commands').glob('*.log')).read_text()
+        self.assertIn('transient cloud read; retrying', diagnostic)
+        self.assertIn('fixture', diagnostic)
+        engine.write_text('#!/bin/sh\necho "access denied" >&2\nexit 3\n')
+        with self.assertRaisesRegex(RuntimeError, 'access denied'):
+            self.app.engine('cat', 'config')
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'macOS I/O policy')
+    def test_download_policy_is_inherited_and_restored_after_failure(self):
+        libc = ib.ctypes.CDLL('/usr/lib/libSystem.B.dylib', use_errno=True)
+        original = libc.getiopolicy_np(3, 0)
+        try:
+            self.assertEqual(libc.setiopolicy_np(3, 0, 1), 0)
+            with self.assertRaisesRegex(RuntimeError, 'simulated failure'):
+                with ib.materialize_dataless_files():
+                    result = subprocess.check_output([sys.executable, '-c',
+                        "import ctypes; print(ctypes.CDLL('/usr/lib/libSystem.B.dylib').getiopolicy_np(3, 0))"], text=True)
+                    self.assertEqual(result.strip(), '2')
+                    raise RuntimeError('simulated failure')
+            self.assertEqual(libc.getiopolicy_np(3, 0), 1)
+        finally:
+            libc.setiopolicy_np(3, 0, original)
+
+
 class ConfigSafety(Fixture):
     def test_destination_recursion_aliases_and_overlaps_rejected(self):
         bad = dataclasses.replace(self.c, dest_root=self.source/'backups')

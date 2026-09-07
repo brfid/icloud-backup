@@ -78,6 +78,14 @@ The watchdog can report a missing or broken runner because it does not import it
 
 Logs are `~/Library/Logs/icloud-backup.log` and `~/Library/Logs/icloud-backup-watch.log`; the most recent 40 individual engine logs are under the configured state directory. Private logs/status may contain source paths and filenames. Keep them outside Git and redact them before sharing an issue. iCloud upload progress and quotas are intentionally outside these checks; handle sync problems through iCloud.
 
+### Cloud-only reads and permission prompts
+
+For `resource deadlock avoided` errors, first check that the installed runner includes the explicit download-on-read policy described in [architecture](architecture.md#icloud-and-space), then inspect iCloud availability and the exact failing path. Finder's Download Now on the backup store can recover an immediate run. Validate fixes through the actual scheduled job using `launchctl kickstart gui/$(id -u)/BASE_LABEL` and wait for fresh success for every source; a successful command launched from a terminal does not establish the scheduler's access.
+
+macOS attributes the scheduled job's permissions to its Python interpreter. In System Settings > Privacy & Security > Files & Folders, check its iCloud Drive access and Desktop access for the warning file. A Python upgrade can create a new interpreter identity and require renewed approval. A Desktop prompt after a failure can be from writing the alert, rather than the cause of the backup failure; compare log times before diagnosing it. Do not grant Full Disk Access merely to fix download policy. The runner still requires ordinary macOS authorization for protected files.
+
+An `Expecting value` JSON error after successful Restic retries can indicate an older runner mixing diagnostic stderr with JSON stdout. Version 2.0.1 separates those streams. Update from the corrected source using the existing configuration and labels, then retry; do not initialize a new store or remove its keys.
+
 ## Connect, migration, and stopping
 
 For an existing backup store on a replacement Mac, first use the recovery guide if files are needed immediately. To resume this app, configure the new paths and run `python3 icloud_backup.py --config /absolute/path/to/config.toml connect` from the checkout, then install without `--initialize`. `connect` reads and checks all data before registering the store locally; it does not infer source configuration from snapshots or reconstruct old status. The next backup establishes current per-source status. Keep one Mac as the writer.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+import ctypes
 from dataclasses import dataclass
 import datetime as dt
 import fcntl
@@ -23,7 +24,7 @@ import tomllib
 import unicodedata
 import uuid
 
-VERSION = '2.0.0'
+VERSION = '2.0.1'
 MANAGED = 'icloud-backup-v2'
 DEFAULT_CONFIG = Path.home() / '.config/icloud_backup/config.toml'
 DEFAULT_SUPPORT = Path.home() / 'Library/Application Support/icloud-backup'
@@ -238,6 +239,36 @@ def notify(message):
         pass
 
 
+@contextmanager
+def materialize_dataless_files():
+    """Allow download-on-read for Restic children, then restore our policy.
+
+    launchd children can inherit a policy that rejects cloud-only reads with
+    EDEADLK. This public macOS I/O policy enables downloads; normal file access
+    permissions still apply. Process policy is inherited across spawn/exec.
+    """
+    if sys.platform != 'darwin':
+        yield
+        return
+    libc = ctypes.CDLL('/usr/lib/libSystem.B.dylib', use_errno=True)
+    get_policy, set_policy = libc.getiopolicy_np, libc.setiopolicy_np
+    get_policy.argtypes = [ctypes.c_int, ctypes.c_int]
+    set_policy.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int]
+    get_policy.restype = set_policy.restype = ctypes.c_int
+    # Public constants from sys/resource.h: materialization, process scope, on.
+    kind, scope, enabled = 3, 0, 2
+    previous = get_policy(kind, scope)
+    if previous < 0 or set_policy(kind, scope, enabled) < 0:
+        error = ctypes.get_errno()
+        raise OSError(error, 'could not enable iCloud download-on-read: ' + os.strerror(error))
+    try:
+        yield
+    finally:
+        if set_policy(kind, scope, previous) < 0:
+            error = ctypes.get_errno()
+            raise OSError(error, 'could not restore iCloud download policy: ' + os.strerror(error))
+
+
 class App:
     """Own local orchestration and status; delegate backup storage to Restic."""
     def __init__(self, config):
@@ -286,8 +317,8 @@ class App:
                '--cache-dir', str(self.c.cache_dir), *map(str, args)]
         self.space_check(extra_space)
         started = time.monotonic()
-        with logfile.open('wb') as f:
-            p = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT, env=env, start_new_session=True)
+        with logfile.open('wb') as f, tempfile.TemporaryFile() as stdout, materialize_dataless_files():
+            p = subprocess.Popen(cmd, stdout=stdout, stderr=f, env=env, start_new_session=True)
             try:
                 while p.poll() is None:
                     if time.monotonic() - started > self.c.timeout_hours * 3600:
@@ -297,11 +328,17 @@ class App:
             except BaseException:
                 stop_child(p)
                 raise
-        output = logfile.read_text(errors='replace')
+            finally:
+                stdout.seek(0)
+                data = stdout.read()
+                if data:
+                    f.write(b'\n--- stdout ---\n' + data)
+            output = data.decode(errors='replace')
         for old in sorted(logs.glob('*.log'))[:-40]:
             old.unlink(missing_ok=True)
         if p.returncode:
-            raise RuntimeError(f'Restic {args[0]} failed (exit {p.returncode}):\n{output[-3000:]}')
+            diagnostics = logfile.read_text(errors='replace')
+            raise RuntimeError(f'Restic {args[0]} failed (exit {p.returncode}):\n{diagnostics[-3000:]}')
         return output
 
     def snapshots(self, *tags):

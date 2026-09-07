@@ -43,7 +43,9 @@ Local `flock` serializes operations that touch the backup store. Restic's stale 
 
 ## iCloud and space
 
-Files evicted by iCloud can be downloaded when Restic reads them. Directory listing, metadata inspection, and timestamp changes do not request file contents, so no `touch` sweep is used. Native download behavior was tested on macOS 26.6.2 with Restic 0.19.1; Finder's Download Now remains an operator fallback. Legacy placeholder handling is documented in [configuration](configuration.md#backup-store-and-sources).
+Files evicted by iCloud can be downloaded when Restic reads them. Before spawning Restic, the runner explicitly enables the public macOS process I/O policy `IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES` with `IOPOL_MATERIALIZE_DATALESS_FILES_ON`; the child inherits it, and the parent restores its previous policy afterward. The system default can reject cloud-only reads with `EDEADLK` even when file permissions are granted. This policy allows downloads within existing macOS permissions and does not grant additional file access. See Apple's [dataless-file guidance](https://developer.apple.com/documentation/technotes/tn3150-getting-ready-for-data-less-files) and `man getiopolicy_np`.
+
+Directory listing, metadata inspection, and timestamp changes do not request file contents, so no `touch` sweep is used. Finder's Download Now remains an operator fallback. Legacy placeholder handling is documented in [configuration](configuration.md#backup-store-and-sources). Restic stdout is kept separate from stderr for parsing: a successful retry can emit diagnostic warnings before valid JSON. Private command logs preserve both streams, and nonzero exit codes remain failures.
 
 This design assumes iCloud will sync. It does not turn a general sync folder into a transactional remote backup store or verify remote upload completion. One Mac writes; other Macs recover after syncing. iCloud can evict data at its discretion, and the app promises no eviction deadline. Full checks, restores, and some maintenance can download substantial data.
 
