@@ -2,6 +2,12 @@
 
 Read [README.md](README.md), then the relevant document in its ownership table. Keep each procedure or explanation in its owner and link to it elsewhere. Python docstrings describe responsibilities, invariants, and side effects; they do not repeat the operating manual. Use soft-wrapped Markdown.
 
+## Git checkpoints and project records
+
+For authorized edits, make local checkpoint commits proactively at meaningful milestones, before major changes of direction, and when finishing the task. Keep commits coherent, scoped, and clearly described so useful stages can be identified and reverted. Preserve unrelated work unless the user asks to include it. Retain useful checkpoints; do not amend, squash, or otherwise rewrite them unless requested. Run verification appropriate to the change and identify unfinished checkpoints in the commit message. Push only when the user explicitly requests a push or remote update.
+
+Use Git for completed work and superseded instructions. Keep current outcomes and necessary rationale at their authoritative point of use; keep working notes for current state, unresolved decisions, and the next useful step. Remove resolved tracking entries. Preserve substantive source evidence and provenance, without maintaining parallel completion logs or histories of instruction changes.
+
 ## Source and installation are separate
 
 This checkout is the portable source of truth for code and documentation. It is not the active installation and contains no authoritative machine configuration. Before working on a live installation, follow [Identify the active installation](docs/operations.md#identify-the-active-installation). The installed command's JSON status and private configuration determine the actual sources, paths, and job labels; the example file does not.
